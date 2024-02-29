@@ -1,0 +1,6 @@
+/nbproject/
+.idea
+/vendor/
+/.htaccess
+/composer.lock
+/.idea/
