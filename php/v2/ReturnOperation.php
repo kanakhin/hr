@@ -1,6 +1,10 @@
 <?php
 
+declare(strict_types=1);
+
 namespace NW\WebService\References\Operations\Notification;
+
+use Exception;
 
 class TsReturnOperation extends ReferencesOperation
 {
@@ -8,13 +12,38 @@ class TsReturnOperation extends ReferencesOperation
     public const TYPE_CHANGE = 2;
 
     /**
-     * @throws \Exception
+     * @param string $field
+     * @param array|null $template_data
+     * @param int $id
+     * @return string
      */
-    public function doOperation(): void
+    public static function __(string $field, ?array $template_data, int $id): string
+    {
+        //какой-то код для обработки шаблона
+        $result = "";
+        return $result;
+    }
+    /**
+     * @throws Exception
+     */
+    public function doOperation(): array
     {
         $data = (array)$this->getRequest('data');
-        $resellerId = $data['resellerId'];
-        $notificationType = (int)$data['notificationType'];
+
+        //обязательные поля
+        $expected_fields = [
+            'complaintId', 'complaintNumber', 'creatorId',
+            'expertId', 'consumptionId', 'consumptionNumber',
+            'agreementNumber', 'date', 'resellerId', 'notificationType',
+            'clientId'
+        ];
+
+        foreach ($expected_fields AS $field) {
+            if (empty($data[$field])) {
+                throw new Exception("Expected field [$field] is empty!", 500);
+            }
+        }
+
         $result = [
             'notificationEmployeeByEmail' => false,
             'notificationClientByEmail'   => false,
@@ -24,59 +53,66 @@ class TsReturnOperation extends ReferencesOperation
             ],
         ];
 
-        if (empty((int)$resellerId)) {
-            $result['notificationClientBySms']['message'] = 'Empty resellerId';
-            return $result;
+        $reseller_id = (int)$data['resellerId'];
+        $notification_type = (int)$data['notificationType'];
+        $client_id = (int)$data['clientId'];
+        $creator_id = (int)$data['creatorId'];
+        $expert_id = (int)$data['expertId'];
+
+        $reseller = Seller::getById($reseller_id);
+        if (is_null($reseller)) {
+            throw new Exception('Seller not found!', 400);
         }
 
-        if (empty((int)$notificationType)) {
-            throw new \Exception('Empty notificationType', 400);
+        $client = Contractor::getById($client_id);
+        if (is_null($client) || $client->type !== Contractor::TYPE_CUSTOMER || $client->Seller->id !== $reseller_id) {
+            throw new Exception('Client not found!', 400);
         }
 
-        $reseller = Seller::getById((int)$resellerId);
-        if ($reseller === null) {
-            throw new \Exception('Seller not found!', 400);
+        $creator = Employee::getById($creator_id);
+        if (is_null($creator)) {
+            throw new Exception('Creator not found!', 400);
         }
 
-        $client = Contractor::getById((int)$data['clientId']);
-        if ($client === null || $client->type !== Contractor::TYPE_CUSTOMER || $client->Seller->id !== $resellerId) {
-            throw new \Exception('сlient not found!', 400);
+        $expert = Employee::getById($expert_id);
+        if (is_null($expert)) {
+            throw new Exception('Expert not found!', 400);
         }
 
-        $cFullName = $client->getFullName();
-        if (empty($client->getFullName())) {
-            $cFullName = $client->name;
+        $client_full_name = $client->getFullName();
+        if (empty($client_full_name)) {
+            $client_full_name = $client->name;
         }
 
-        $cr = Employee::getById((int)$data['creatorId']);
-        if ($cr === null) {
-            throw new \Exception('Creator not found!', 400);
+        $creator_full_name = $creator->getFullName();
+        if (empty($creator_full_name)) {
+            $creator_full_name = $creator->name;
         }
 
-        $et = Employee::getById((int)$data['expertId']);
-        if ($et === null) {
-            throw new \Exception('Expert not found!', 400);
+        $expert_full_name = $expert->getFullName();
+        if (empty($expert_full_name)) {
+            $expert_full_name = $expert->name;
         }
 
         $differences = '';
-        if ($notificationType === self::TYPE_NEW) {
-            $differences = __('NewPositionAdded', null, $resellerId);
-        } elseif ($notificationType === self::TYPE_CHANGE && !empty($data['differences'])) {
-            $differences = __('PositionStatusHasChanged', [
-                    'FROM' => Status::getName((int)$data['differences']['from']),
-                    'TO'   => Status::getName((int)$data['differences']['to']),
-                ], $resellerId);
+        if ($notification_type === self::TYPE_NEW) {
+            $differences = self::__('NewPositionAdded', null, $reseller_id);
+        } elseif ($notification_type === self::TYPE_CHANGE && !empty($data['differences'])) {
+            $differences = self::__('PositionStatusHasChanged', [
+                'FROM' => Status::getName((int)$data['differences']['from']),
+                'TO'   => Status::getName((int)$data['differences']['to']),
+            ], $reseller_id);
         }
 
-        $templateData = [
+        $template_data = [
             'COMPLAINT_ID'       => (int)$data['complaintId'],
             'COMPLAINT_NUMBER'   => (string)$data['complaintNumber'],
-            'CREATOR_ID'         => (int)$data['creatorId'],
-            'CREATOR_NAME'       => $cr->getFullName(),
-            'EXPERT_ID'          => (int)$data['expertId'],
-            'EXPERT_NAME'        => $et->getFullName(),
-            'CLIENT_ID'          => (int)$data['clientId'],
-            'CLIENT_NAME'        => $cFullName,
+            'CREATOR_ID'         => $creator_id,
+            'CREATOR_NAME'       => $creator_full_name,
+            'EXPERT_ID'          => $expert_id,
+            'EXPERT_NAME'        => $expert_full_name,
+            'CLIENT_ID'          => $client_id,
+            'CLIENT_NAME'        => $client_full_name,
             'CONSUMPTION_ID'     => (int)$data['consumptionId'],
             'CONSUMPTION_NUMBER' => (string)$data['consumptionNumber'],
             'AGREEMENT_NUMBER'   => (string)$data['agreementNumber'],
@@ -85,46 +121,47 @@ class TsReturnOperation extends ReferencesOperation
         ];
 
         // Если хоть одна переменная для шаблона не задана, то не отправляем уведомления
-        foreach ($templateData as $key => $tempData) {
-            if (empty($tempData)) {
-                throw new \Exception("Template Data ({$key}) is empty!", 500);
+        foreach ($template_data as $key => $temp_data) {
+            if (empty($temp_data)) {
+                throw new Exception("Template Data ($key) is empty!", 500);
             }
         }
 
-        $emailFrom = getResellerEmailFrom($resellerId);
+        $email_from = getResellerEmailFrom();
+
         // Получаем email сотрудников из настроек
-        $emails = getEmailsByPermit($resellerId, 'tsGoodsReturn');
-        if (!empty($emailFrom) && count($emails) > 0) {
+        $emails = getEmailsByPermit($reseller_id, 'tsGoodsReturn');
+        if (!empty($email_from) && count($emails) > 0) {
             foreach ($emails as $email) {
                 MessagesClient::sendMessage([
                     0 => [ // MessageTypes::EMAIL
-                           'emailFrom' => $emailFrom,
+                           'emailFrom' => $email_from,
                            'emailTo'   => $email,
-                           'subject'   => __('complaintEmployeeEmailSubject', $templateData, $resellerId),
-                           'message'   => __('complaintEmployeeEmailBody', $templateData, $resellerId),
+                           'subject'   => self::__('complaintEmployeeEmailSubject', $template_data, $reseller_id),
+                           'message'   => self::__('complaintEmployeeEmailBody', $template_data, $reseller_id),
                     ],
-                ], $resellerId, NotificationEvents::CHANGE_RETURN_STATUS);
+                ], $reseller_id, NotificationEvents::CHANGE_RETURN_STATUS);
                 $result['notificationEmployeeByEmail'] = true;
-
             }
         }
 
         // Шлём клиентское уведомление, только если произошла смена статуса
-        if ($notificationType === self::TYPE_CHANGE && !empty($data['differences']['to'])) {
-            if (!empty($emailFrom) && !empty($client->email)) {
+        if ($notification_type === self::TYPE_CHANGE && !empty($data['differences']['to'])) {
+            if (!empty($email_from) && !empty($client->email)) {
                 MessagesClient::sendMessage([
                     0 => [ // MessageTypes::EMAIL
-                           'emailFrom' => $emailFrom,
+                           'emailFrom' => $email_from,
                            'emailTo'   => $client->email,
-                           'subject'   => __('complaintClientEmailSubject', $templateData, $resellerId),
-                           'message'   => __('complaintClientEmailBody', $templateData, $resellerId),
+                           'subject'   => self::__('complaintClientEmailSubject', $template_data, $reseller_id),
+                           'message'   => self::__('complaintClientEmailBody', $template_data, $reseller_id),
                     ],
-                ], $resellerId, $client->id, NotificationEvents::CHANGE_RETURN_STATUS, (int)$data['differences']['to']);
+                ], $reseller_id, $client->id, NotificationEvents::CHANGE_RETURN_STATUS, (int)$data['differences']['to']);
                 $result['notificationClientByEmail'] = true;
             }
 
             if (!empty($client->mobile)) {
-                $res = NotificationManager::send($resellerId, $client->id, NotificationEvents::CHANGE_RETURN_STATUS, (int)$data['differences']['to'], $templateData, $error);
+                $error = false;
+                $res = NotificationManager::send($reseller_id, $client->id, NotificationEvents::CHANGE_RETURN_STATUS, (int)$data['differences']['to'], $template_data, $error);
                 if ($res) {
                     $result['notificationClientBySms']['isSent'] = true;
                 }
